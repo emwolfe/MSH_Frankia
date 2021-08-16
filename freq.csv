@@ -1,0 +1,13 @@
+Strains,Species,Frequency,Gene
+1,A. rubra,1,16S
+2,A. rubra,5,16S
+3,A. rubra,4,16S
+4,A. rubra,1,16S
+1,A. viridis,5,16S
+2,A. viridis,5,16S
+3,A. viridis,1,16S
+4,A. viridis,0,16S
+1,A. rubra,1,nif
+2,A. rubra,10,nif
+1,A. viridis,1,nif
+2,A. viridis,11,nif

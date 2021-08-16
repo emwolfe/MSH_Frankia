@@ -1,0 +1,1830 @@
+---
+title: "R Notebook -- MSH *Frankia* analysis"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+This is the statistical analysis for the <i>Frankia</i> data collected by Sebastian Singleton (undergraduate-PSU) during the 2017 field season on Mount St. Helens under John Bishop's (WSU-Vancouver) USFS permit. Stats done by ERW in R (version listed in a chunk below) after creating the OTU table in mothur (v.1.42.0) from .fasta files exported from Geneious. Fasta files were exported from sequences that had already been manually inspected and paired (fwd & rev) into consensus sequences. We used a cutoff value of 0.007 (99.3%) in mothur. Note: In order to generate the OTU tables, make sure the files are in the same directory as mothur (e.g. on the C:drive, where it installs initially, or in the env/bin on the server agamede). Mothur commands are below (and should not be knitted):
+
+The following chunk is code for processing files in mothur.
+```{mothur mothur_code}
+get.current() #Check working directory
+
+cluster(phylip=combined-MAFFT.dist, cutoff=0.007) #use MAFFT to align seqs (there is no reference db for nif), then import the file to phylip, which will export a .dist file that can be imported into mothur
+
+make.shared(list=combined-MAFFT.opti_mcc.list, group=groups.txt) #make a shared file to import into R using the phyloseq package, and use whatever grouping makes sense - this can be done in a .txt file in Notepad... It's a 2-column file with the seq names followed by the group that each seq belongs in. Now you can import the .shared into R to begin analyses.
+
+```
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(error = TRUE)
+```
+Results were generated with the following OS and R version:
+```{r version, echo=FALSE}
+version
+```
+
+Libraries called were `phyloseq`, `vegan`, `ggplot2`, `PMCMR`, `PMCMRplus`, `ggmap`, `ggrepel`, `gridExtra`, `RColorBrewer`, and `car`.
+
+```{r load_libraries2, include=FALSE}
+#load packages
+#install phyloseq if it's not already - hashed because of RMarkdown and not wanting to install it each time
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("phyloseq")
+library(phyloseq)
+library(vegan)
+library(ggplot2)
+library(PMCMRplus)
+library(ggmap)
+library(ggrepel)
+library(gridExtra)
+library(RColorBrewer)
+library(car)
+
+```
+
+```{r load_nif_data2, include=FALSE}
+#outputs from mothur for nif data
+nif_shared <- "nif_MAFFT_out-samp.opti_mcc.shared"
+nif_tree_shared <- "end_trim_2_MAFFT_993.opti_mcc.shared"
+
+#import shared into a format that R can read
+nif_OTUs_sample <- import_mothur(mothur_shared_file = nif_shared,cutoff = "0.007")
+nif_OTUs_sample <- t(nif_OTUs_sample) #transposed so rows=samples
+nif_OTUs_sample
+
+nif_sample_env <- read.csv("nif_env_sample.csv", row.names = 1)
+
+nif_sample_env$Shannon <-diversity(nif_OTUs_sample)
+nif_sample_env$Richness <-specnumber(nif_OTUs_sample)
+nif_sample_env
+
+nif_OTUs_tree <- import_mothur(mothur_shared_file = nif_tree_shared,cutoff = "0.007")
+nif_OTUs_tree <- t(nif_OTUs_tree) #transposed so rows=samples
+nif_OTUs_tree
+
+nif_tree_env <- read.csv("nif_env_tree.csv")
+
+nif_tree_env$Shannon <-diversity(nif_OTUs_tree)
+nif_tree_env$Richness <-specnumber(nif_OTUs_tree)
+nif_tree_env
+
+
+```
+
+```{r load_bac_data2, include=FALSE}
+bac_sample_shared <- "16S_MAFFT_unique.opti_mcc.samp.shared" 
+bac_tree_shared <- "16S_MAFFT_unique.opti_mcc.shared" 
+
+
+bac_OTUs_sample <- import_mothur(mothur_shared_file = bac_sample_shared,cutoff = "0.007")
+bac_OTUs_sample <- t(bac_OTUs_sample) #transposed so rows=samples
+bac_OTUs_sample
+
+bac_OTUs_tree <- import_mothur(mothur_shared_file = bac_tree_shared,cutoff = "0.007")
+bac_OTUs_tree <- t(bac_OTUs_tree) #transposed so rows=samples
+bac_OTUs_tree
+
+bac_sample_env <- read.csv("bac_env_sample.csv")
+
+bac_sample_env$Plot <- as.factor(bac_sample_env$Plot)
+bac_sample_env$Shannon <-diversity(bac_OTUs_sample)
+bac_sample_env$Richness <-specnumber(bac_OTUs_sample)
+bac_sample_env
+
+bac_tree_env <- read.csv("bac_env_tree.csv")
+
+bac_tree_env$Plot <- as.factor(bac_tree_env$Plot)
+bac_tree_env$Shannon <-diversity(bac_OTUs_tree)
+bac_tree_env$Richness <-specnumber(bac_OTUs_tree)
+bac_tree_env
+
+```
+
+```{r nif_nmds2, include=TRUE}
+set.seed(226) #because it's permutative
+
+nif_df.mds<-metaMDS(nif_OTUs_tree, distance = "bray", k = 3, trymax = 50, autotransform=TRUE)
+nif_df.mds
+
+
+plot(nif_df.mds, type = "n", display = "sites",choice=c(1,2))
+points(nif_df.mds, display = "sites",pch=c(1:2))
+legend(-1.1,-0.5, legend=c("red alder","Sitka alder"), bty = "solid", pch = c(1,2))
+ordiellipse(nif_df.mds,nif_tree_env$Species,display="sites", conf=0.95,kind="se",draw="polygon",label=TRUE)
+
+```
+
+```{r overall_div}
+#Q1: overall diversity on MSH
+###nif marker
+
+shapiro.test(nif_tree_env$Shannon)
+#p=0.001, perform KW
+
+kw<- kruskal.test(nif_tree_env$Shannon,nif_tree_env$Plot)
+kw
+#no difference in Shannon div among plots
+
+nsp_plot <- t.test(nif_tree_env$Shannon~nif_tree_env$Species)
+nsp_plot
+#no difference
+
+###16S marker
+shapiro.test(bac_tree_env$Shannon)
+#p=0.0096 but qqnorm is acceptable
+
+Shannon_Plot <- aov(bac_tree_env$Shannon~bac_tree_env$Plot)
+Shannon_Plot; summary(Shannon_Plot)
+#p=0.946
+
+sp_plot <- t.test(bac_tree_env$Shannon~bac_tree_env$Species)
+sp_plot
+#p=0.02826; note that is is Welch's t-test by default
+
+```
+
+Shannon diversity indices were not significantly different among plots for either the *nif* or *16S* datasets (Kruskal-Wallis and ANOVA, respectively; p>0.05). However, tree species (*A. rubra* vs. *A. viridis* ssp. *sinuata*) did affect Shannon diversity indices for the 16S dataset only (Welch's t-test, t=2.367, df=19.772, p=0.028).
+
+```{r host_com_specificity}
+##Q2: is there any host specificity?
+
+###nif
+adonis(nif_OTUs_tree~Species,nif_tree_env,permutations = 999, method = "bray")
+#no... p=0.886
+#with the new dataset 7/13: still no, p=0.653
+
+###16S
+adonis(bac_OTUs_tree~Species,bac_tree_env,permutations = 999, method = "bray")
+#no... p=0.734
+
+nif.dist <- vegdist(nif_OTUs_tree)
+anosim(nif.dist,nif_tree_env$Species,distance="bray")
+#p=0.825
+#7/13: p=0.701
+
+bac.dist <- vegdist(bac_OTUs_tree)
+anosim(bac.dist,bac_tree_env$Species,distance="bray")
+
+mod <- betadisper(nif.dist, nif_tree_env$Species)
+anova(mod)
+permutest(mod, pairwise=T, permutations = 999)
+#homogeniety of variance confirmed; p=0.131
+#it's p=0.894 this time, but same conclusion
+#7/13: p=0.803
+
+mod2 <- betadisper(bac.dist, bac_tree_env$Species)
+anova(mod2)
+permutest(mod2, pairwise=T, permutations = 999)
+#same for bacteria; p=0.778
+
+```
+
+Community composition did not differ between red and Sitka alder (PERMANOVA, p>0.05).
+
+```{r}
+#Q3: Is there any variation in Frankia genotypes WITHIN individual trees?
+
+adonis(nif_OTUs_sample~Plot*Tree,nif_sample_env,permutations = 999, method = "bray")
+#p=0.001 for both plot and tree
+
+nifs.dist <- vegdist(nif_OTUs_sample)
+anosim(nifs.dist,nif_sample_env$Species,distance="bray")
+
+mod3 <- betadisper(nifs.dist, nif_sample_env$Species)
+anova(mod3)
+permutest(mod3, pairwise=T, permutations = 999)
+#all homogeniety of var p>0.05
+#R stat is close to 0 = even dispersion within groups and between groups
+
+adonis(bac_OTUs_sample~Plot*Tree,bac_sample_env,permutations = 999, method = "bray")
+#p=0.001 for plot and p=0.019 for tree
+
+bacs.dist <- vegdist(bac_OTUs_sample)
+anosim(bacs.dist,bac_sample_env$Tree,distance="bray")
+#R stat is close to 0 = even dispersion within groups and between groups
+
+mod4 <- betadisper(bacs.dist, bac_sample_env$Tree)
+anova(mod4)
+permutest(mod4, pairwise=T, permutations = 999)
+#all homogeniety of var p>0.05
+
+
+```
+
+*Frankia* community composition but not richness differed among individual trees (PERMANOVA, p=0.026). Within-tree variation (i.e. the number of strains identified from all nodule samples taken from the same tree) was low, with the maximum number of 2 OTUs being isolated per tree for *nif* and 4 per tree for *16S*. 
+
+```{r com_comp_difs}
+##Q4: Are there spatial patterns (=comparing plots) in Frankia diversity and/or host specificity?
+
+###nif
+adonis(nif_OTUs_tree~as.factor(Plot),nif_tree_env,permutations = 999, method = "bray")
+#yes, p=0.003
+#still yes, p=0.002, df=4,22; f=3.3478
+#7/13: still yes: p=0.002, df=4,22; f=4.6375
+
+###16S
+adonis(bac_OTUs_tree~as.factor(Plot),bac_tree_env,permutations = 999, method = "bray")
+#yes, p =0.001
+
+anosim(nif.dist,nif_tree_env$Plot,distance="bray")
+#p=0.214
+#7/13: p=0.122
+
+anosim(bac.dist,bac_tree_env$Plot,distance="bray")
+#p=0.006
+
+mod5 <- betadisper(nif.dist, nif_tree_env$Plot)
+anova(mod5)
+permutest(mod5, pairwise=T, permutations = 999)
+#p=0.001 so dispersion is different -- PERMANOVA result may be due to dispersion or location
+#7/13: p=0.001 so dispersion IS different
+
+mod6 <- betadisper(bac.dist, bac_tree_env$Plot)
+anova(mod6)
+permutest(mod6, pairwise=T, permutations = 999)
+#p=0.017 so dispersion is different -- PERMANOVA result may be due to dispersion or location
+
+```
+
+
+```{r soil_chem}
+#Q5: Is the distribution of Frankia genotypes affected by soil chemical features?
+
+#nif
+my.rda <- rda(nif_tree_env[,c(4:18,21:24)],scale=T)
+
+biplot(my.rda,
+       display = c("sites", 
+                   "species"),
+       type = c("text",
+                "points"))
+
+#Add "hulls"
+ordihull(my.rda,
+         group = nif_tree_env$Plot,
+         col=c(1:5))
+
+legend("topright",
+       col = c(1:5), 
+       lty = 1,
+       legend = c(1:5))
+
+
+
+biplot(my.rda,
+       display = c("sites", 
+                   "species"),
+       type = c("text",
+                "points"),
+       pch=c(1:2))
+
+#Add "hulls"
+ordihull(my.rda,
+         group = nif_tree_env$Species,
+         col=c(1:2))
+
+legend("topright",
+       col = c(1:2), 
+       lty = 1,
+       legend = c("A. rubra","A. viridis"))
+
+#let's check which variables are dif btwn plots, and only include those in the rda plot
+
+#usisng env as the dataframe to loop through
+nif_tree_env$Plot <- as.factor(nif_tree_env$Plot)
+nif_env_loop <- nif_tree_env[,c(4:26)]
+
+variables = 2
+iterations = 23
+
+shapiroresult <- matrix(ncol = variables, nrow=iterations)
+
+shapirooutput <- 
+  for (x in 1:ncol(nif_env_loop)) {
+      s <- shapiro.test((nif_env_loop[[x]]))
+      shapiroresult[x,1] <- colnames(nif_env_loop[x])
+      shapiroresult[x,2] <- s$p.value
+    }
+
+
+shapiroresult
+#pH, BpH, and C:N (p=0.03) are probably okay to not transform
+
+nif_env_log <- log(nif_env_loop+1)
+
+variables = 2
+iterations = 23
+
+shapiroresult <- matrix(ncol = variables, nrow=iterations)
+
+shapirooutput <- 
+  for (x in 1:ncol(nif_env_log)) {
+      s <- shapiro.test((nif_env_log[[x]]))
+      shapiroresult[x,1] <- colnames(nif_env_log[x])
+      shapiroresult[x,2] <- s$p.value
+    }
+
+
+shapiroresult
+#some are improved...
+
+moist <- aov(nif_env_log$Moisture~nif_tree_env$Plot)
+
+; summary(moist); TukeyHSD(moist)
+#significant
+
+m<-TukeyHSD(moist)
+
+install.packages("multcompView")
+library(multcompView)
+
+multcompLetters4(moist,m,threshold = 0.05)
+# $`nif_tree_env$Plot`
+#    2    3    5    4    1 
+#  "a"  "a"  "b" "bc"  "c"
+
+CN <- aov(nif_env_log$C.N~nif_tree_env$Plot); summary(CN)
+#this is almost significant, p=0.0719
+NH4 <- aov(nif_env_log$NH4.N~nif_tree_env$Plot)
+summary(NH4)
+n<-TukeyHSD(NH4)
+#this is also significant, p=0.0429, driven by difs in 5 and 2
+multcompLetters4(NH4,n,threshold=0.05)
+# $`nif_tree_env$Plot`
+#    2    1    3    4    5 
+#  "a" "ab" "ab" "ab"  "b" 
+
+NO3 <- aov(nif_env_log$NO3.N~nif_tree_env$Plot); summary(NO3)
+#no sig, but just barely didn't meet SW (p=0.04)
+P <- aov(nif_env_log$P~nif_tree_env$Plot)
+summary(P)
+p<-TukeyHSD(P)
+#sig
+multcompLetters4(P,p,threshold=0.05)
+# $`nif_tree_env$Plot`
+#    3    4    5    2    1 
+#  "a"  "a"  "a" "ab"  "b" 
+
+
+Mg <- aov(nif_env_log$Mg~nif_tree_env$Plot); summary(Mg); TukeyHSD(Mg)
+#sig, driven by difs in 5-1 and 3-1
+pH <- aov(nif_env_log$pH~nif_tree_env$Plot); summary(pH)
+#not sig
+
+kruskal.test(nif_tree_env$C,nif_tree_env$Plot)
+kruskal.test(nif_tree_env$N,nif_tree_env$Plot)
+kruskal.test(nif_tree_env$K,nif_tree_env$Plot)
+kruskal.test(nif_tree_env$S,nif_tree_env$Plot)
+#significant, p=0.001099
+kwAllPairsDunnTest(nif_tree_env$S,nif_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(nif_tree_env$Ca,nif_tree_env$Plot)
+#sig, p=0.0332
+kwAllPairsDunnTest(nif_tree_env$Ca,nif_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(nif_tree_env$Cu,nif_tree_env$Plot)
+#sig, p=0.01874
+kwAllPairsDunnTest(nif_tree_env$Cu,nif_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(nif_tree_env$Zn,nif_tree_env$Plot)
+#marginally sig, p=0.0645
+kruskal.test(nif_tree_env$B,nif_tree_env$Plot)
+#sig, p=0.02674
+kwAllPairsDunnTest(nif_tree_env$B,nif_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(nif_tree_env$CEC,nif_tree_env$Plot)
+#sign, p=0.02458
+kwAllPairsDunnTest(nif_tree_env$CEC,nif_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(nif_tree_env$EC,nif_tree_env$Plot)
+#sig, p=0.00282
+kwAllPairsDunnTest(nif_tree_env$EC,nif_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(nif_tree_env$Shannon,nif_tree_env$Plot)
+kruskal.test(nif_tree_env$Richness,nif_tree_env$Plot)
+
+#so, moisture, CN, NH4, P, Mg, S, Ca, Cu, B, CEC, EC
+
+sig.rda <- rda(nif_tree_env[,c(4,7:8,10,12:14,16,18,21,24)],scale=T)
+
+biplot(sig.rda,
+       display = c("sites", 
+                   "species"),
+       type = c("text",
+                "points"))
+
+#Add "hulls"
+ordihull(sig.rda,
+         group = nif_tree_env$Plot,
+         col=c("black","green","blue","purple","pink"))
+
+legend("topright",
+       col = c("black","green","blue","purple","pink"), 
+       lty = 1,
+       legend = c("Plot 1","Plot 2","Plot 3","Plot 4","Plot 5"))
+
+tree.rda <- rda(nif_tree_env[,c(4,7:8,10,12:14,16,18,21,24)],scale=T)
+
+biplot(tree.rda,
+       display = c("sites", 
+                   "species"),
+       type = c("text",
+                "points"))
+
+#Add "hulls"
+ordihull(tree.rda,
+         group = nif_tree_env$Species,
+         col=c("black","green"))
+
+legend("topright",
+       col = c("black","green"), 
+       lty = 1,
+       legend = c("Alnus rubra","Alnus viridis"))
+
+dev.off()
+jpeg(filename = "env_heat_map-test.jpeg",units="in",width =7, height=7, res=300) #saves graph output
+heatmap(hmdata, Colv = NA, Rowv = NA, scale="column", col = coul)
+text(0.77,0.95,"b")#ec
+text(0.2,0.95,"b")#nh4
+text(-0.1,0.95,"b")#moist5
+text(0.025,0.71,"bc")#moist4
+mtext("hi",side=3)
+dev.off()
+
+gg_env<-read.csv("gg_env.csv")
+
+gg_env$log <- log(gg_env$Value + 1)
+gg_env$fac <-as.factor(gg_env$log)
+
+level_order <- rev(c("moisture","NH4-N","P","Mg","Ca","S","Cu","B","CEC","EC"))
+
+ggheat <- ggplot(data=gg_env,aes(x=Plot,y=factor(Variable,level=level_order),fill=log)) + geom_tile() + scale_fill_distiller(palette = "GnBu",direction = 1) + theme_bw() +  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(), legend.position="none",
+        axis.title.x = element_text(size=20),axis.title.y = element_blank(),axis.text.y = element_text(size=16),
+        axis.text.x = element_text(size=16))
+
+pairwise <- ggheat +
+  annotate("text",x=1,y=10,label="c")+annotate("text",x=2,y=10,label="a")+annotate("text",x=3,y=10,label="a")+annotate("text",x=4,y=10,label="bc")+annotate("text",x=5,y=10,label="b")+
+  annotate("text",x=1,y=9,label="ab")+annotate("text",x=2,y=9,label="a")+annotate("text",x=3,y=9,label="ab")+annotate("text",x=4,y=9,label="ab")+annotate("text",x=5,y=9,label="b")+
+  annotate("text",x=1,y=8,label="b")+annotate("text",x=2,y=8,label="ab")+annotate("text",x=3,y=8,label="b")+annotate("text",x=4,y=8,label="b")+annotate("text",x=5,y=8,label="b")+
+  annotate("text",x=1,y=7,label="b")+annotate("text",x=2,y=7,label="ab")+annotate("text",x=3,y=7,label="a")+annotate("text",x=4,y=7,label="ab")+annotate("text",x=5,y=7,label="a")+
+  annotate("text",x=1,y=5,label="ab")+annotate("text",x=2,y=5,label="b")+annotate("text",x=3,y=5,label="ab")+annotate("text",x=4,y=5,label="a")+annotate("text",x=5,y=5,label="a")+
+annotate("text",x=1,y=6,label="a")+annotate("text",x=2,y=6,label="b")+annotate("text",x=3,y=6,label="ab")+annotate("text",x=4,y=6,label="ab")+annotate("text",x=5,y=6,label="ab")+
+annotate("text",x=1,y=4,label="a")+annotate("text",x=2,y=4,label="ab")+annotate("text",x=3,y=4,label="ab")+annotate("text",x=4,y=4,label="ab")+annotate("text",x=5,y=4,label="b")+
+annotate("text",x=1,y=3,label="ab")+annotate("text",x=2,y=3,label="a")+annotate("text",x=3,y=3,label="ab")+annotate("text",x=4,y=3,label="ab")+annotate("text",x=5,y=3,label="b")+
+  annotate("text",x=1,y=2,label="a")+annotate("text",x=2,y=2,label="b")+annotate("text",x=3,y=2,label="ab")+annotate("text",x=4,y=2,label="ab")+annotate("text",x=5,y=2,label="ab")+
+annotate("text",x=1,y=1,label="ab")+annotate("text",x=2,y=1,label="a")+annotate("text",x=3,y=1,label="ab")+annotate("text",x=4,y=1,label="b")+
+  annotate("text",x=5,y=1,label="b")
+  
+dev.off()
+jpeg(filename = "gg_heatmap.jpeg",units="in",width =7, height=7, res=300) #saves graph output
+pairwise
+dev.off()
+
+multcompLetters4(moist,m,threshold = 0.05)
+# $`nif_tree_env$Plot`
+#    2    3    5    4    1 
+#  "a"  "a"  "b" "bc"  "c"
+
+CN <- aov(nif_env_log$C.N~nif_tree_env$Plot); summary(CN)
+#this is almost significant, p=0.0719
+NH4 <- aov(nif_env_log$NH4.N~nif_tree_env$Plot)
+summary(NH4)
+n<-TukeyHSD(NH4)
+#this is also significant, p=0.0429, driven by difs in 5 and 2
+multcompLetters4(NH4,n,threshold=0.05)
+# $`nif_tree_env$Plot`
+#    2    1    3    4    5 
+#  "a" "ab" "ab" "ab"  "b" 
+
+NO3 <- aov(nif_env_log$NO3.N~nif_tree_env$Plot); summary(NO3)
+#no sig, but just barely didn't meet SW (p=0.04)
+P <- aov(nif_env_log$P~nif_tree_env$Plot)
+summary(P)
+p<-TukeyHSD(P)
+#sig
+multcompLetters4(P,p,threshold=0.05)
+# $`nif_tree_env$Plot`
+#    3    4    5    2    1 
+#  "a"  "a"  "a" "ab"  "b" 
+
+
+Mg <- aov(nif_env_log$Mg~nif_tree_env$Plot)
+summary(Mg)
+mg<-TukeyHSD(Mg)
+#sig, driven by difs in 5-1 and 3-1
+multcompLetters4(Mg,mg,threshold=0.05)
+# $`nif_tree_env$Plot`
+#    3    5    2    4    1 
+#  "a"  "a" "ab" "ab"  "b" 
+
+pH <- aov(nif_env_log$pH~nif_tree_env$Plot); summary(pH)
+#not sig
+
+kruskal.test(nif_tree_env$C,nif_tree_env$Plot)
+kruskal.test(nif_tree_env$N,nif_tree_env$Plot)
+kruskal.test(nif_tree_env$K,nif_tree_env$Plot)
+kruskal.test(nif_tree_env$S,nif_tree_env$Plot)
+#significant, p=0.001099
+kwAllPairsDunnTest(nif_tree_env$S,nif_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(nif_tree_env$Ca,nif_tree_env$Plot)
+#sig, p=0.0332
+kwAllPairsDunnTest(nif_tree_env$Ca,nif_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(nif_tree_env$Cu,nif_tree_env$Plot)
+#sig, p=0.01874
+kwAllPairsDunnTest(nif_tree_env$Cu,nif_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(nif_tree_env$Zn,nif_tree_env$Plot)
+#marginally sig, p=0.0645
+kruskal.test(nif_tree_env$B,nif_tree_env$Plot)
+#sig, p=0.02674
+kwAllPairsDunnTest(nif_tree_env$B,nif_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(nif_tree_env$CEC,nif_tree_env$Plot)
+#sign, p=0.02458
+kwAllPairsDunnTest(nif_tree_env$CEC,nif_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(nif_tree_env$EC,nif_tree_env$Plot)
+#sig, p=0.00282
+kwAllPairsDunnTest(nif_tree_env$EC,nif_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(nif_tree_env$Shannon,nif_tree_env$Plot)
+kruskal.test(nif_tree_env$Richness,nif_tree_env$Plot)
+
+
+
+  #low = "#ccebc5", high = "#0868ac")
+
+###################################################
+
+###16S
+my.rda <- rda(bac_tree_env[,c(4:8,10:26)],scale=T)
+
+biplot(my.rda,
+       display = c("sites", 
+                   "species"),
+       type = c("text",
+                "points"))
+
+#Add "hulls"
+ordihull(my.rda,
+         group = bac_tree_env$Plot,
+         col=c(1:5))
+
+legend("topright",
+       col = c(1:5), 
+       lty = 1,
+       legend = c(1:5))
+
+
+
+biplot(my.rda,
+       display = c("sites", 
+                   "species"),
+       type = c("text",
+                "points"),
+       pch=c(1:2))
+
+#Add "hulls"
+ordihull(my.rda,
+         group = bac_tree_env$Species,
+         col=c(1:2))
+
+legend("topright",
+       col = c(1:2), 
+       lty = 1,
+       legend = c("A. rubra","A. viridis"))
+
+#let's check which variables are dif btwn plots, and only include those in the rda plot
+
+#usisng env as the dataframe to loop through
+bac_tree_env$Plot <- as.factor(bac_tree_env$Plot)
+bac_env_loop <- bac_tree_env[,c(4:26)]
+
+variables = 2
+iterations = 23
+
+shapiroresult <- matrix(ncol = variables, nrow=iterations)
+
+shapirooutput <- 
+  for (x in 1:ncol(bac_env_loop)) {
+      s <- shapiro.test((bac_env_loop[[x]]))
+      shapiroresult[x,1] <- colnames(bac_env_loop[x])
+      shapiroresult[x,2] <- s$p.value
+    }
+
+
+shapiroresult
+#pH, BpH, and C:N (p=0.03) are probably okay to not transform
+
+bac_env_log <- log(bac_env_loop+1)
+
+variables = 2
+iterations = 23
+
+shapiroresult <- matrix(ncol = variables, nrow=iterations)
+
+shapirooutput <- 
+  for (x in 1:ncol(bac_env_log)) {
+      s <- shapiro.test((bac_env_log[[x]]))
+      shapiroresult[x,1] <- colnames(bac_env_log[x])
+      shapiroresult[x,2] <- s$p.value
+    }
+
+
+shapiroresult
+#some are improved...
+
+moist <- aov(bac_env_log$Moisture~bac_tree_env$Plot); summary(moist); TukeyHSD(moist)
+#sigbacicant
+CN <- aov(bac_env_log$C.N~bac_tree_env$Plot); summary(CN)
+#this is almost significant, p=0.0719
+NH4 <- aov(bac_env_log$NH4.N~bac_tree_env$Plot); summary(NH4); TukeyHSD(NH4)
+#this is also significant, p=0.0429, driven by difs in 5 and 2
+NO3 <- aov(bac_env_log$NO3.N~bac_tree_env$Plot); summary(NO3)
+#no sig, but just barely didn't meet SW (p=0.04)
+P <- aov(bac_env_log$P~bac_tree_env$Plot); summary(P); TukeyHSD(P)
+#sig
+Mg <- aov(bac_env_log$Mg~bac_tree_env$Plot); summary(Mg); TukeyHSD(Mg)
+#sig, driven by difs in 5-1 and 3-1
+pH <- aov(bac_env_log$pH~bac_tree_env$Plot); summary(pH)
+#not sig
+
+kruskal.test(bac_tree_env$C,bac_tree_env$Plot)
+kruskal.test(bac_tree_env$N,bac_tree_env$Plot)
+kruskal.test(bac_tree_env$K,bac_tree_env$Plot)
+kruskal.test(bac_tree_env$S,bac_tree_env$Plot)
+#significant, p=0.001099
+kwAllPairsDunnTest(bac_tree_env$S,bac_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(bac_tree_env$Ca,bac_tree_env$Plot)
+#sig, p=0.0332
+kwAllPairsDunnTest(bac_tree_env$Ca,bac_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(bac_tree_env$Cu,bac_tree_env$Plot)
+#sig, p=0.01874
+kwAllPairsDunnTest(bac_tree_env$Cu,bac_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(bac_tree_env$Zn,bac_tree_env$Plot)
+#marginally sig, p=0.0645
+kruskal.test(bac_tree_env$B,bac_tree_env$Plot)
+#sig, p=0.02674
+kwAllPairsDunnTest(bac_tree_env$B,bac_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(bac_tree_env$CEC,bac_tree_env$Plot)
+#sign, p=0.02458
+kwAllPairsDunnTest(bac_tree_env$CEC,bac_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(bac_tree_env$EC,bac_tree_env$Plot)
+#sig, p=0.00282
+kwAllPairsDunnTest(bac_tree_env$EC,bac_tree_env$Plot,p.adjust.method = "bonferroni")
+kruskal.test(bac_tree_env$Shannon,bac_tree_env$Plot)
+kruskal.test(bac_tree_env$Richness,bac_tree_env$Plot)
+
+#so, moisture, CN, NH4, P, Mg, S, Ca, Cu, B, CEC, EC
+
+mypalette <- brewer.pal(10,"Spectral")
+sig.rda <- rda(nif_tree_env[,c(4,7:8,10,12:14,16,18,21,24)],scale=T)
+
+biplot(sig.rda,
+       display = c("sites", 
+                   "species"),
+       type = c("text",
+                "points"))
+
+#Add "hulls"
+ordihull(sig.rda,
+         group = nif_tree_env$Plot,
+         col=c("#7a0177","#c51b8a","#f768a1","#000000","#fbb4b9"))
+
+legend("topright",
+       col = c("#7a0177","#c51b8a","#f768a1","#000000","#fbb4b9"), 
+       lty = 1,
+       legend = c("Plot 1","Plot 2","Plot 3","Plot 4","Plot 5"))
+
+tree.rda <- rda(nif_tree_env[,c(4,7:8,10,12:14,16,18,21,24)],scale=T)
+
+biplot(tree.rda,
+       display = c("sites", 
+                   "species"),
+       type = c("text",
+                "points"))
+
+#Add "hulls"
+ordihull(tree.rda,
+         group = nif_tree_env$Species,
+         col=c("black","green"))
+
+legend("topright",
+       col = c("black","green"), 
+       lty = 1,
+       legend = c("Alnus rubra","Alnus viridis"))
+
+
+
+```
+
+```{r mantel_test}
+#now the env/GPS matrix
+dist_trees <- read.csv("gps_trees_dist.csv",row.names=1)
+dist_trees
+str(dist_trees)
+
+just_gps <- dist_trees[,-3]
+just_gps
+
+
+b_gps <- just_gps[c(-1,-18),]
+
+soil <- read.csv("env_trees.csv",row.names=1)
+soil
+
+bacsoil <- read.csv("env_b_trees.csv",row.names=1)
+bacsoil
+
+com <- betadiver(nif_OTUs_tree)
+
+vcom <- vegdist(nif_OTUs_tree, method="bray")
+bcom <- vegdist(bac_OTUs_tree[c(-1),], method="bray")
+
+dsoil <- vegdist(soil, method="euclidean")
+bsoil <- vegdist(bacsoil[c(-1),], method="euclidean")
+
+dist <- dist(cbind(just_gps$Longitude, just_gps$Latitude), method = "euclidean")
+dist
+dist <- dist(cbind(just_sub$Longitude, just_sub$Latitude), method = "euclidean")
+dist
+
+
+bdist <- dist(cbind(b_gps$Longitude, b_gps$Latitude), method = "euclidean")
+bdist
+
+plot(dist,vcom,pch=16,cex=0.5,col="black",bty="l",xlab="Spatial distance",ylab="Species composition dissimilarity")
+
+mantel(vcom, dist, perm = 9999)
+mantel.partial(vcom, dsoil, dist, method="pearson", permutations=999)
+#removes influence of geographical dist btwn plots
+mantel.partial(vcom, dist, dsoil, method="pearson", permutations=999)
+#removes influence of environmental variables
+#7/13: r=0.4033, p=0.001, per=999
+
+mantel(bcom, dist, perm = 9999)
+mantel.partial(bcom, dsoil, dist, method="pearson", permutations=999)
+#removes influence of geographical dist btwn plots
+mantel.partial(bcom, dist, dsoil, method="pearson", permutations=999)
+#removes influence of environmental variables
+
+
+
+library(ecodist)
+# Mantel test: is the difference in env variables between sites
+# related to the difference in Frankia composition between sites?
+mantel(vcom ~ dsoil, nperm=999, nboot=500)
+
+# Mantel test: is the geographic distance between sites
+# related to the difference in Frankia composition between sites?
+mantel(vcom ~ dist)
+#yes, we can reject that Mantel r = 0 (i.e. no correlation)
+
+# Partial Mantel test: is the difference in env variables between sites
+# related to the difference in Frankia composition once the
+# linear effects of geographic distance are removed?
+mantel(vcom ~ dsoil + dist)
+#yes, we can reject null that Mantel r = 0 (i.e. no correlation)
+
+#####
+
+# Mantel test: is the difference in env variables between sites
+# related to the difference in Frankia composition between sites?
+mantel(bcom ~ bsoil, nperm=999, nboot=500)
+
+# Mantel test: is the geographic distance between sites
+# related to the difference in Frankia composition between sites?
+mantel(bcom ~ bdist)
+#yes, we can reject that Mantel r = 0 (i.e. no correlation)
+
+# Partial Mantel test: is the difference in env variables between sites
+# related to the difference in Frankia composition once the
+# linear effects of geographic distance are removed?
+mantel(bcom ~ bsoil + bdist)
+#yes, we can reject null that Mantel r = 0 (i.e. no correlation)
+#look at pval3, which tests null r = 0
+#pval1 is one-tailed r <= 0
+#pval2 is one-tailed r >= 0
+
+
+```
+
+```{r categorize_env_strains}
+#nif communitity first
+Moisture_00 <- min(nif_tree_env$Moisture)
+Moisture_33 <- quantile(nif_tree_env$Moisture,0.33333)
+Moisture_66 <- quantile(nif_tree_env$Moisture,0.66667)
+Moisture_100 <- max(nif_tree_env$Moisture)
+
+nif_tree_env$Moisture_cat[nif_tree_env$Moisture >= Moisture_00 & nif_tree_env$Moisture < Moisture_33] = "low"
+
+nif_tree_env$Moisture_cat[nif_tree_env$Moisture >= Moisture_33 & nif_tree_env$Moisture < Moisture_66] = "med"
+
+nif_tree_env$Moisture_cat[nif_tree_env$Moisture >= Moisture_66 & nif_tree_env$Moisture <= Moisture_100] = "high"
+
+
+
+C_00 <- min(nif_tree_env$C)
+C_33 <- quantile(nif_tree_env$C,0.33333)
+C_66 <- quantile(nif_tree_env$C,0.66667)
+C_100 <- max(nif_tree_env$C)
+
+nif_tree_env$C_cat[nif_tree_env$C >= C_00 & nif_tree_env$C < C_33] = "low"
+
+nif_tree_env$C_cat[nif_tree_env$C >= C_33 & nif_tree_env$C < C_66] = "med"
+
+nif_tree_env$C_cat[nif_tree_env$C >= C_66 & nif_tree_env$C <= C_100] = "high"
+
+
+N_00 <- min(nif_tree_env$N)
+N_33 <- quantile(nif_tree_env$N,0.33333)
+N_66 <- quantile(nif_tree_env$N,0.66667)
+N_100 <- max(nif_tree_env$N)
+
+nif_tree_env$N_cat[nif_tree_env$N >= N_00 & nif_tree_env$N < N_33] = "low"
+
+nif_tree_env$N_cat[nif_tree_env$N >= N_33 & nif_tree_env$N < N_66] = "med"
+
+nif_tree_env$N_cat[nif_tree_env$N >= N_66 & nif_tree_env$N <= N_100] = "high"
+
+
+C.N_00 <- min(nif_tree_env$C.N)
+C.N_33 <- quantile(nif_tree_env$C.N,0.33333)
+C.N_66 <- quantile(nif_tree_env$C.N,0.66667)
+C.N_100 <- max(nif_tree_env$C.N)
+
+nif_tree_env$C.N_cat[nif_tree_env$C.N >= C.N_00 & nif_tree_env$C.N < C.N_33] = "low"
+
+nif_tree_env$C.N_cat[nif_tree_env$C.N >= C.N_33 & nif_tree_env$C.N < C.N_66] = "med"
+
+nif_tree_env$C.N_cat[nif_tree_env$C.N >= C.N_66 & nif_tree_env$C.N <= C.N_100] = "high"
+
+
+
+NH4.N_00 <- min(nif_tree_env$NH4.N)
+NH4.N_33 <- quantile(nif_tree_env$NH4.N,0.33333,na.rm =T)
+NH4.N_66 <- quantile(nif_tree_env$NH4.N,0.66667,na.rm=T)
+NH4.N_100 <- max(nif_tree_env$NH4.N)
+
+nif_tree_env$NH4.N_cat[nif_tree_env$NH4.N >= NH4.N_00 & nif_tree_env$NH4.N < NH4.N_33] = "low"
+
+nif_tree_env$NH4.N_cat[nif_tree_env$NH4.N >= NH4.N_33 & nif_tree_env$NH4.N < NH4.N_66] = "med"
+
+nif_tree_env$NH4.N_cat[nif_tree_env$NH4.N >= NH4.N_66 & nif_tree_env$NH4.N <= NH4.N_100] = "high"
+ 
+
+NO3.N_00 <- min(nif_tree_env$NO3.N,na.rm=T)
+NO3.N_33 <- quantile(nif_tree_env$NO3.N,0.33333,na.rm=T)
+NO3.N_66 <- quantile(nif_tree_env$NO3.N,0.66667,na.rm=T)
+NO3.N_100 <- max(nif_tree_env$NO3.N,na.rm=T)
+
+nif_tree_env$NO3.N_cat[nif_tree_env$NO3.N >= NO3.N_00 & nif_tree_env$NO3.N < NO3.N_33] = "low"
+
+nif_tree_env$NO3.N_cat[nif_tree_env$NO3.N >= NO3.N_33 & nif_tree_env$NO3.N < NO3.N_66] = "med"
+
+nif_tree_env$NO3.N_cat[nif_tree_env$NO3.N >= NO3.N_66 & nif_tree_env$NO3.N <= NO3.N_100] = "high"
+
+nif_tree_env$NO3.N_cat[is.na(nif_tree_env$NO3.N)] = "NA"
+
+
+P_00 <- min(nif_tree_env$P)
+P_33 <- quantile(nif_tree_env$P,0.33333)
+P_66 <- quantile(nif_tree_env$P,0.66667)
+P_100 <- max(nif_tree_env$P)
+
+nif_tree_env$P_cat[nif_tree_env$P >= P_00 & nif_tree_env$P < P_33] = "low"
+
+nif_tree_env$P_cat[nif_tree_env$P >= P_33 & nif_tree_env$P < P_66] = "med"
+
+nif_tree_env$P_cat[nif_tree_env$P >= P_66 & nif_tree_env$P <= P_100] = "high"
+
+
+
+K_00 <- min(nif_tree_env$K)
+K_33 <- quantile(nif_tree_env$K,0.33333)
+K_66 <- quantile(nif_tree_env$K,0.66667)
+K_100 <- max(nif_tree_env$K)
+
+nif_tree_env$K_cat[nif_tree_env$K >= K_00 & nif_tree_env$K < K_33] = "low"
+
+nif_tree_env$K_cat[nif_tree_env$K >= K_33 & nif_tree_env$K < K_66] = "med"
+
+nif_tree_env$K_cat[nif_tree_env$K >= K_66 & nif_tree_env$K <= K_100] = "high"
+
+
+
+S_00 <- min(nif_tree_env$S)
+S_33 <- quantile(nif_tree_env$S,0.33333)
+S_66 <- quantile(nif_tree_env$S,0.66667)
+S_100 <- max(nif_tree_env$S)
+
+nif_tree_env$S_cat[nif_tree_env$S >= S_00 & nif_tree_env$S < S_33] = "low"
+
+nif_tree_env$S_cat[nif_tree_env$S >= S_33 & nif_tree_env$S < S_66] = "med"
+
+nif_tree_env$S_cat[nif_tree_env$S >= S_66 & nif_tree_env$S <= S_100] = "high"
+
+
+
+Ca_00 <- min(nif_tree_env$Ca)
+Ca_33 <- quantile(nif_tree_env$Ca,0.33333)
+Ca_66 <- quantile(nif_tree_env$Ca,0.66667)
+Ca_100 <- max(nif_tree_env$Ca)
+
+nif_tree_env$Ca_cat[nif_tree_env$Ca >= Ca_00 & nif_tree_env$Ca < Ca_33] = "low"
+
+nif_tree_env$Ca_cat[nif_tree_env$Ca >= Ca_33 & nif_tree_env$Ca < Ca_66] = "med"
+
+nif_tree_env$Ca_cat[nif_tree_env$Ca >= Ca_66 & nif_tree_env$Ca <= Ca_100] = "high"
+
+
+
+Mg_00 <- min(nif_tree_env$Mg)
+Mg_33 <- quantile(nif_tree_env$Mg,0.33333)
+Mg_66 <- quantile(nif_tree_env$Mg,0.66667)
+Mg_100 <- max(nif_tree_env$Mg)
+
+nif_tree_env$Mg_cat[nif_tree_env$Mg >= Mg_00 & nif_tree_env$Mg < Mg_33] = "low"
+
+nif_tree_env$Mg_cat[nif_tree_env$Mg >= Mg_33 & nif_tree_env$Mg < Mg_66] = "med"
+
+nif_tree_env$Mg_cat[nif_tree_env$Mg >= Mg_66 & nif_tree_env$Mg <= Mg_100] = "high"
+
+
+
+Mn_00 <- min(nif_tree_env$Mn)
+Mn_33 <- quantile(nif_tree_env$Mn,0.33333)
+Mn_66 <- quantile(nif_tree_env$Mn,0.66667)
+Mn_100 <- max(nif_tree_env$Mn)
+
+nif_tree_env$Mn_cat[nif_tree_env$Mn >= Mn_00 & nif_tree_env$Mn < Mn_33] = "low"
+
+nif_tree_env$Mn_cat[nif_tree_env$Mn >= Mn_33 & nif_tree_env$Mn < Mn_66] = "med"
+
+nif_tree_env$Mn_cat[nif_tree_env$Mn >= Mn_66 & nif_tree_env$Mn <= Mn_100] = "high"
+
+
+
+Cu_00 <- min(nif_tree_env$Cu)
+Cu_33 <- quantile(nif_tree_env$Cu,0.33333)
+Cu_66 <- quantile(nif_tree_env$Cu,0.66667)
+Cu_100 <- max(nif_tree_env$Cu)
+
+nif_tree_env$Cu_cat[nif_tree_env$Cu >= Cu_00 & nif_tree_env$Cu < Cu_33] = "low"
+
+nif_tree_env$Cu_cat[nif_tree_env$Cu >= Cu_33 & nif_tree_env$Cu < Cu_66] = "med"
+
+nif_tree_env$Cu_cat[nif_tree_env$Cu >= Cu_66 & nif_tree_env$Cu <= Cu_100] = "high"
+
+
+
+Zn_00 <- min(nif_tree_env$Zn)
+Zn_33 <- quantile(nif_tree_env$Zn,0.33333)
+Zn_66 <- quantile(nif_tree_env$Zn,0.66667)
+Zn_100 <- max(nif_tree_env$Zn)
+
+nif_tree_env$Zn_cat[nif_tree_env$Zn >= Zn_00 & nif_tree_env$Zn < Zn_33] = "low"
+
+nif_tree_env$Zn_cat[nif_tree_env$Zn >= Zn_33 & nif_tree_env$Zn < Zn_66] = "med"
+
+nif_tree_env$Zn_cat[nif_tree_env$Zn >= Zn_66 & nif_tree_env$Zn <= Zn_100] = "high"
+
+
+
+B_00 <- min(nif_tree_env$B)
+B_33 <- quantile(nif_tree_env$B,0.33333)
+B_66 <- quantile(nif_tree_env$B,0.66667)
+B_100 <- max(nif_tree_env$B)
+
+nif_tree_env$B_cat[nif_tree_env$B >= B_00 & nif_tree_env$B < B_33] = "low"
+
+nif_tree_env$B_cat[nif_tree_env$B >= B_33 & nif_tree_env$B < B_66] = "med"
+
+nif_tree_env$B_cat[nif_tree_env$B >= B_66 & nif_tree_env$B <= B_100] = "high"
+
+
+
+CEC_00 <- min(nif_tree_env$CEC)
+CEC_33 <- quantile(nif_tree_env$CEC,0.33333)
+CEC_66 <- quantile(nif_tree_env$CEC,0.66667)
+CEC_100 <- max(nif_tree_env$CEC)
+
+nif_tree_env$CEC_cat[nif_tree_env$CEC >= CEC_00 & nif_tree_env$CEC < CEC_33] = "low"
+
+nif_tree_env$CEC_cat[nif_tree_env$CEC >= CEC_33 & nif_tree_env$CEC < CEC_66] = "med"
+
+nif_tree_env$CEC_cat[nif_tree_env$CEC >= CEC_66 & nif_tree_env$CEC <= CEC_100] = "high"
+
+
+
+pH_00 <- min(nif_tree_env$pH)
+pH_33 <- quantile(nif_tree_env$pH,0.33333)
+pH_66 <- quantile(nif_tree_env$pH,0.66667)
+pH_100 <- max(nif_tree_env$pH)
+
+nif_tree_env$pH_cat[nif_tree_env$pH >= pH_00 & nif_tree_env$pH < pH_33] = "low"
+
+nif_tree_env$pH_cat[nif_tree_env$pH >= pH_33 & nif_tree_env$pH < pH_66] = "med"
+
+nif_tree_env$pH_cat[nif_tree_env$pH >= pH_66 & nif_tree_env$pH <= pH_100] = "high"
+
+
+
+BpH_00 <- min(nif_tree_env$BpH)
+BpH_33 <- quantile(nif_tree_env$BpH,0.33333)
+BpH_66 <- quantile(nif_tree_env$BpH,0.66667)
+BpH_100 <- max(nif_tree_env$BpH)
+
+nif_tree_env$BpH_cat[nif_tree_env$BpH >= BpH_00 & nif_tree_env$BpH < BpH_33] = "low"
+
+nif_tree_env$BpH_cat[nif_tree_env$BpH >= BpH_33 & nif_tree_env$BpH < BpH_66] = "med"
+
+nif_tree_env$BpH_cat[nif_tree_env$BpH >= BpH_66 & nif_tree_env$BpH <= BpH_100] = "high"
+
+
+
+EC_00 <- min(nif_tree_env$EC)
+EC_33 <- quantile(nif_tree_env$EC,0.33333)
+EC_66 <- quantile(nif_tree_env$EC,0.66667)
+EC_100 <- max(nif_tree_env$EC)
+
+nif_tree_env$EC_cat[nif_tree_env$EC >= EC_00 & nif_tree_env$EC < EC_33] = "low"
+
+nif_tree_env$EC_cat[nif_tree_env$EC >= EC_33 & nif_tree_env$EC < EC_66] = "med"
+
+nif_tree_env$EC_cat[nif_tree_env$EC >= EC_66 & nif_tree_env$EC <= EC_100] = "high"
+
+str(nif_tree_env)
+
+cat_env <- nif_tree_env[,c(1,3,27:45)]
+
+Moisture_ind <- multipatt(nif_OTUs_tree,cat_env$Moisture_cat, control = how(nperm=999))
+summary(Moisture_ind)
+
+
+C_ind <- multipatt(nif_OTUs_tree,cat_env$C_cat, control = how(nperm=999))
+summary(C_ind)
+
+N_ind <- multipatt(nif_OTUs_tree,cat_env$N_cat, control = how(nperm=999))
+summary(N_ind)
+
+C.N_ind <- multipatt(nif_OTUs_tree,cat_env$C.N_cat, control = how(nperm=999))
+summary(C.N_ind)
+
+NH4.N_ind <- multipatt(nif_OTUs_tree,cat_env$NH4.N_cat, control = how(nperm=999))
+summary(NH4.N_ind)
+
+P_ind <- multipatt(nif_OTUs_tree,cat_env$P_cat, control = how(nperm=999))
+summary(P_ind)
+
+K_ind <- multipatt(nif_OTUs_tree,cat_env$K_cat, control = how(nperm=999))
+summary(K_ind)
+
+S_ind <- multipatt(nif_OTUs_tree,cat_env$S_cat, control = how(nperm=999))
+summary(S_ind)
+
+Ca_ind <- multipatt(nif_OTUs_tree,cat_env$Ca_cat, control = how(nperm=999))
+summary(Ca_ind)
+
+Mg_ind <- multipatt(nif_OTUs_tree,cat_env$Mg_cat, control = how(nperm=999))
+summary(Mg_ind)
+
+Mn_ind <- multipatt(nif_OTUs_tree,cat_env$Mn_cat, control = how(nperm=999))
+summary(Mn_ind)
+
+Cu_ind <- multipatt(nif_OTUs_tree,cat_env$Cu_cat, control = how(nperm=999))
+summary(Cu_ind)
+
+Zn_ind <- multipatt(nif_OTUs_tree,cat_env$Zn_cat, control = how(nperm=999))
+summary(Zn_ind)
+
+B_ind <- multipatt(nif_OTUs_tree,cat_env$B_cat, control = how(nperm=999))
+summary(B_ind)
+
+CEC_ind <- multipatt(nif_OTUs_tree,cat_env$CEC_cat, control = how(nperm=999))
+summary(CEC_ind)
+
+pH_ind <- multipatt(nif_OTUs_tree,cat_env$pH_cat, control = how(nperm=999))
+summary(pH_ind)
+
+BpH_ind <- multipatt(nif_OTUs_tree,cat_env$BpH_cat, control = how(nperm=999))
+summary(BpH_ind)
+
+EC_ind <- multipatt(nif_OTUs_tree,cat_env$EC_cat, control = how(nperm=999))
+summary(EC_ind)
+
+NO3.N_ind <- multipatt(nif_OTUs_tree,cat_env$NO3.N_cat, control = how(nperm=999))
+summary(NO3.N_ind)
+
+plot_ind <- multipatt(nif_OTUs_tree,as.factor(cat_env$Plot), control = how(nperm=999))
+summary(plot_ind)
+
+
+#now for 16S OTUs
+Moisture_00 <- min(bac_tree_env$Moisture, na.rm=T)
+Moisture_33 <- quantile(bac_tree_env$Moisture,0.33333, na.rm=T)
+Moisture_66 <- quantile(bac_tree_env$Moisture,0.66667, na.rm=T)
+Moisture_100 <- max(bac_tree_env$Moisture, na.rm=T)
+
+bac_tree_env$Moisture_cat[bac_tree_env$Moisture >= Moisture_00 & bac_tree_env$Moisture < Moisture_33] = "low"
+
+bac_tree_env$Moisture_cat[bac_tree_env$Moisture >= Moisture_33 & bac_tree_env$Moisture < Moisture_66] = "med"
+
+bac_tree_env$Moisture_cat[bac_tree_env$Moisture >= Moisture_66 & bac_tree_env$Moisture <= Moisture_100] = "high"
+
+
+
+C_00 <- min(bac_tree_env$C, na.rm=T)
+C_33 <- quantile(bac_tree_env$C,0.33333, na.rm=T)
+C_66 <- quantile(bac_tree_env$C,0.66667, na.rm=T)
+C_100 <- max(bac_tree_env$C, na.rm=T)
+
+bac_tree_env$C_cat[bac_tree_env$C >= C_00 & bac_tree_env$C < C_33] = "low"
+
+bac_tree_env$C_cat[bac_tree_env$C >= C_33 & bac_tree_env$C < C_66] = "med"
+
+bac_tree_env$C_cat[bac_tree_env$C >= C_66 & bac_tree_env$C <= C_100] = "high"
+
+
+N_00 <- min(bac_tree_env$N, na.rm=T)
+N_33 <- quantile(bac_tree_env$N,0.33333, na.rm=T)
+N_66 <- quantile(bac_tree_env$N,0.66667, na.rm=T)
+N_100 <- max(bac_tree_env$N, na.rm=T)
+
+bac_tree_env$N_cat[bac_tree_env$N >= N_00 & bac_tree_env$N < N_33] = "low"
+
+bac_tree_env$N_cat[bac_tree_env$N >= N_33 & bac_tree_env$N < N_66] = "med"
+
+bac_tree_env$N_cat[bac_tree_env$N >= N_66 & bac_tree_env$N <= N_100] = "high"
+
+
+C.N_00 <- min(bac_tree_env$C.N, na.rm=T)
+C.N_33 <- quantile(bac_tree_env$C.N,0.33333, na.rm=T)
+C.N_66 <- quantile(bac_tree_env$C.N,0.66667, na.rm=T)
+C.N_100 <- max(bac_tree_env$C.N, na.rm=T)
+
+bac_tree_env$C.N_cat[bac_tree_env$C.N >= C.N_00 & bac_tree_env$C.N < C.N_33] = "low"
+
+bac_tree_env$C.N_cat[bac_tree_env$C.N >= C.N_33 & bac_tree_env$C.N < C.N_66] = "med"
+
+bac_tree_env$C.N_cat[bac_tree_env$C.N >= C.N_66 & bac_tree_env$C.N <= C.N_100] = "high"
+
+
+
+NH4.N_00 <- min(bac_tree_env$NH4.N, na.rm=T)
+NH4.N_33 <- quantile(bac_tree_env$NH4.N,0.33333,na.rm =T)
+NH4.N_66 <- quantile(bac_tree_env$NH4.N,0.66667,na.rm=T)
+NH4.N_100 <- max(bac_tree_env$NH4.N, na.rm=T)
+
+bac_tree_env$NH4.N_cat[bac_tree_env$NH4.N >= NH4.N_00 & bac_tree_env$NH4.N < NH4.N_33] = "low"
+
+bac_tree_env$NH4.N_cat[bac_tree_env$NH4.N >= NH4.N_33 & bac_tree_env$NH4.N < NH4.N_66] = "med"
+
+bac_tree_env$NH4.N_cat[bac_tree_env$NH4.N >= NH4.N_66 & bac_tree_env$NH4.N <= NH4.N_100] = "high"
+ 
+
+NO3.N_00 <- min(bac_tree_env$NO3.N,na.rm=T)
+NO3.N_33 <- quantile(bac_tree_env$NO3.N,0.33333,na.rm=T)
+NO3.N_66 <- quantile(bac_tree_env$NO3.N,0.66667,na.rm=T)
+NO3.N_100 <- max(bac_tree_env$NO3.N,na.rm=T)
+
+bac_tree_env$NO3.N_cat[bac_tree_env$NO3.N >= NO3.N_00 & bac_tree_env$NO3.N < NO3.N_33] = "low"
+
+bac_tree_env$NO3.N_cat[bac_tree_env$NO3.N >= NO3.N_33 & bac_tree_env$NO3.N < NO3.N_66] = "med"
+
+bac_tree_env$NO3.N_cat[bac_tree_env$NO3.N >= NO3.N_66 & bac_tree_env$NO3.N <= NO3.N_100] = "high"
+
+bac_tree_env$NO3.N_cat[is.na(bac_tree_env$NO3.N)] = "NA"
+
+
+P_00 <- min(bac_tree_env$P, na.rm=T)
+P_33 <- quantile(bac_tree_env$P,0.33333, na.rm=T)
+P_66 <- quantile(bac_tree_env$P,0.66667, na.rm=T)
+P_100 <- max(bac_tree_env$P, na.rm=T)
+
+bac_tree_env$P_cat[bac_tree_env$P >= P_00 & bac_tree_env$P < P_33] = "low"
+
+bac_tree_env$P_cat[bac_tree_env$P >= P_33 & bac_tree_env$P < P_66] = "med"
+
+bac_tree_env$P_cat[bac_tree_env$P >= P_66 & bac_tree_env$P <= P_100] = "high"
+
+
+
+K_00 <- min(bac_tree_env$K, na.rm=T)
+K_33 <- quantile(bac_tree_env$K,0.33333, na.rm=T)
+K_66 <- quantile(bac_tree_env$K,0.66667, na.rm=T)
+K_100 <- max(bac_tree_env$K, na.rm=T)
+
+bac_tree_env$K_cat[bac_tree_env$K >= K_00 & bac_tree_env$K < K_33] = "low"
+
+bac_tree_env$K_cat[bac_tree_env$K >= K_33 & bac_tree_env$K < K_66] = "med"
+
+bac_tree_env$K_cat[bac_tree_env$K >= K_66 & bac_tree_env$K <= K_100] = "high"
+
+
+
+S_00 <- min(bac_tree_env$S, na.rm=T)
+S_33 <- quantile(bac_tree_env$S,0.33333, na.rm=T)
+S_66 <- quantile(bac_tree_env$S,0.66667, na.rm=T)
+S_100 <- max(bac_tree_env$S, na.rm=T)
+
+bac_tree_env$S_cat[bac_tree_env$S >= S_00 & bac_tree_env$S < S_33] = "low"
+
+bac_tree_env$S_cat[bac_tree_env$S >= S_33 & bac_tree_env$S < S_66] = "med"
+
+bac_tree_env$S_cat[bac_tree_env$S >= S_66 & bac_tree_env$S <= S_100] = "high"
+
+
+
+Ca_00 <- min(bac_tree_env$Ca, na.rm=T)
+Ca_33 <- quantile(bac_tree_env$Ca,0.33333, na.rm=T)
+Ca_66 <- quantile(bac_tree_env$Ca,0.66667, na.rm=T)
+Ca_100 <- max(bac_tree_env$Ca, na.rm=T)
+
+bac_tree_env$Ca_cat[bac_tree_env$Ca >= Ca_00 & bac_tree_env$Ca < Ca_33] = "low"
+
+bac_tree_env$Ca_cat[bac_tree_env$Ca >= Ca_33 & bac_tree_env$Ca < Ca_66] = "med"
+
+bac_tree_env$Ca_cat[bac_tree_env$Ca >= Ca_66 & bac_tree_env$Ca <= Ca_100] = "high"
+
+
+
+Mg_00 <- min(bac_tree_env$Mg, na.rm=T)
+Mg_33 <- quantile(bac_tree_env$Mg,0.33333, na.rm=T)
+Mg_66 <- quantile(bac_tree_env$Mg,0.66667, na.rm=T)
+Mg_100 <- max(bac_tree_env$Mg, na.rm=T)
+
+bac_tree_env$Mg_cat[bac_tree_env$Mg >= Mg_00 & bac_tree_env$Mg < Mg_33] = "low"
+
+bac_tree_env$Mg_cat[bac_tree_env$Mg >= Mg_33 & bac_tree_env$Mg < Mg_66] = "med"
+
+bac_tree_env$Mg_cat[bac_tree_env$Mg >= Mg_66 & bac_tree_env$Mg <= Mg_100] = "high"
+
+
+
+Mn_00 <- min(bac_tree_env$Mn, na.rm=T)
+Mn_33 <- quantile(bac_tree_env$Mn,0.33333, na.rm=T)
+Mn_66 <- quantile(bac_tree_env$Mn,0.66667, na.rm=T)
+Mn_100 <- max(bac_tree_env$Mn, na.rm=T)
+
+bac_tree_env$Mn_cat[bac_tree_env$Mn >= Mn_00 & bac_tree_env$Mn < Mn_33] = "low"
+
+bac_tree_env$Mn_cat[bac_tree_env$Mn >= Mn_33 & bac_tree_env$Mn < Mn_66] = "med"
+
+bac_tree_env$Mn_cat[bac_tree_env$Mn >= Mn_66 & bac_tree_env$Mn <= Mn_100] = "high"
+
+
+
+Cu_00 <- min(bac_tree_env$Cu, na.rm=T)
+Cu_33 <- quantile(bac_tree_env$Cu,0.33333, na.rm=T)
+Cu_66 <- quantile(bac_tree_env$Cu,0.66667, na.rm=T)
+Cu_100 <- max(bac_tree_env$Cu, na.rm=T)
+
+bac_tree_env$Cu_cat[bac_tree_env$Cu >= Cu_00 & bac_tree_env$Cu < Cu_33] = "low"
+
+bac_tree_env$Cu_cat[bac_tree_env$Cu >= Cu_33 & bac_tree_env$Cu < Cu_66] = "med"
+
+bac_tree_env$Cu_cat[bac_tree_env$Cu >= Cu_66 & bac_tree_env$Cu <= Cu_100] = "high"
+
+
+
+Zn_00 <- min(bac_tree_env$Zn, na.rm=T)
+Zn_33 <- quantile(bac_tree_env$Zn,0.33333, na.rm=T)
+Zn_66 <- quantile(bac_tree_env$Zn,0.66667, na.rm=T)
+Zn_100 <- max(bac_tree_env$Zn, na.rm=T)
+
+bac_tree_env$Zn_cat[bac_tree_env$Zn >= Zn_00 & bac_tree_env$Zn < Zn_33] = "low"
+
+bac_tree_env$Zn_cat[bac_tree_env$Zn >= Zn_33 & bac_tree_env$Zn < Zn_66] = "med"
+
+bac_tree_env$Zn_cat[bac_tree_env$Zn >= Zn_66 & bac_tree_env$Zn <= Zn_100] = "high"
+
+
+
+B_00 <- min(bac_tree_env$B, na.rm=T)
+B_33 <- quantile(bac_tree_env$B,0.33333, na.rm=T)
+B_66 <- quantile(bac_tree_env$B,0.66667, na.rm=T)
+B_100 <- max(bac_tree_env$B, na.rm=T)
+
+bac_tree_env$B_cat[bac_tree_env$B >= B_00 & bac_tree_env$B < B_33] = "low"
+
+bac_tree_env$B_cat[bac_tree_env$B >= B_33 & bac_tree_env$B < B_66] = "med"
+
+bac_tree_env$B_cat[bac_tree_env$B >= B_66 & bac_tree_env$B <= B_100] = "high"
+
+
+
+CEC_00 <- min(bac_tree_env$CEC, na.rm=T)
+CEC_33 <- quantile(bac_tree_env$CEC,0.33333, na.rm=T)
+CEC_66 <- quantile(bac_tree_env$CEC,0.66667, na.rm=T)
+CEC_100 <- max(bac_tree_env$CEC, na.rm=T)
+
+bac_tree_env$CEC_cat[bac_tree_env$CEC >= CEC_00 & bac_tree_env$CEC < CEC_33] = "low"
+
+bac_tree_env$CEC_cat[bac_tree_env$CEC >= CEC_33 & bac_tree_env$CEC < CEC_66] = "med"
+
+bac_tree_env$CEC_cat[bac_tree_env$CEC >= CEC_66 & bac_tree_env$CEC <= CEC_100] = "high"
+
+
+
+pH_00 <- min(bac_tree_env$pH, na.rm=T)
+pH_33 <- quantile(bac_tree_env$pH,0.33333, na.rm=T)
+pH_66 <- quantile(bac_tree_env$pH,0.66667, na.rm=T)
+pH_100 <- max(bac_tree_env$pH, na.rm=T)
+
+bac_tree_env$pH_cat[bac_tree_env$pH >= pH_00 & bac_tree_env$pH < pH_33] = "low"
+
+bac_tree_env$pH_cat[bac_tree_env$pH >= pH_33 & bac_tree_env$pH < pH_66] = "med"
+
+bac_tree_env$pH_cat[bac_tree_env$pH >= pH_66 & bac_tree_env$pH <= pH_100] = "high"
+
+
+
+BpH_00 <- min(bac_tree_env$BpH, na.rm=T)
+BpH_33 <- quantile(bac_tree_env$BpH,0.33333, na.rm=T)
+BpH_66 <- quantile(bac_tree_env$BpH,0.66667, na.rm=T)
+BpH_100 <- max(bac_tree_env$BpH, na.rm=T)
+
+bac_tree_env$BpH_cat[bac_tree_env$BpH >= BpH_00 & bac_tree_env$BpH < BpH_33] = "low"
+
+bac_tree_env$BpH_cat[bac_tree_env$BpH >= BpH_33 & bac_tree_env$BpH < BpH_66] = "med"
+
+bac_tree_env$BpH_cat[bac_tree_env$BpH >= BpH_66 & bac_tree_env$BpH <= BpH_100] = "high"
+
+
+
+EC_00 <- min(bac_tree_env$EC, na.rm=T)
+EC_33 <- quantile(bac_tree_env$EC,0.33333, na.rm=T)
+EC_66 <- quantile(bac_tree_env$EC,0.66667, na.rm=T)
+EC_100 <- max(bac_tree_env$EC, na.rm=T)
+
+bac_tree_env$EC_cat[bac_tree_env$EC >= EC_00 & bac_tree_env$EC < EC_33] = "low"
+
+bac_tree_env$EC_cat[bac_tree_env$EC >= EC_33 & bac_tree_env$EC < EC_66] = "med"
+
+bac_tree_env$EC_cat[bac_tree_env$EC >= EC_66 & bac_tree_env$EC <= EC_100] = "high"
+
+bac_tree_env$C_cat[is.na(bac_tree_env$C)] = "NA"
+bac_tree_env$N_cat[is.na(bac_tree_env$N)] = "NA"
+bac_tree_env$C.N_cat[is.na(bac_tree_env$C.N)] = "NA"
+bac_tree_env$NH4.N_cat[is.na(bac_tree_env$NH4.N)] = "NA"
+bac_tree_env$P_cat[is.na(bac_tree_env$P)] = "NA"
+bac_tree_env$K_cat[is.na(bac_tree_env$K)] = "NA"
+bac_tree_env$S_cat[is.na(bac_tree_env$S)] = "NA"
+bac_tree_env$Ca_cat[is.na(bac_tree_env$Ca)] = "NA"
+bac_tree_env$Mg_cat[is.na(bac_tree_env$Mg)] = "NA"
+bac_tree_env$Mn_cat[is.na(bac_tree_env$Mn)] = "NA"
+bac_tree_env$Cu_cat[is.na(bac_tree_env$Cu)] = "NA"
+bac_tree_env$Zn_cat[is.na(bac_tree_env$Zn)] = "NA"
+bac_tree_env$B_cat[is.na(bac_tree_env$B)] = "NA"
+bac_tree_env$CEC_cat[is.na(bac_tree_env$CEC)] = "NA"
+bac_tree_env$pH_cat[is.na(bac_tree_env$pH)] = "NA"
+bac_tree_env$BpH_cat[is.na(bac_tree_env$BpH)] = "NA"
+bac_tree_env$EC_cat[is.na(bac_tree_env$EC)] = "NA"
+bac_tree_env$Moisture_cat[is.na(bac_tree_env$Moisture)] = "NA"
+
+str(bac_tree_env)
+
+cat_env <- bac_tree_env[-1,c(1,3,25:43)]
+
+Moisture_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$Moisture_cat, control = how(nperm=999))
+summary(Moisture_ind)
+
+
+C_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$C_cat, control = how(nperm=999))
+summary(C_ind)
+
+N_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$N_cat, control = how(nperm=999))
+summary(N_ind)
+
+C.N_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$C.N_cat, control = how(nperm=999))
+summary(C.N_ind)
+
+NH4.N_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$NH4.N_cat, control = how(nperm=999))
+summary(NH4.N_ind)
+
+P_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$P_cat, control = how(nperm=999))
+summary(P_ind)
+
+K_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$K_cat, control = how(nperm=999))
+summary(K_ind)
+
+S_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$S_cat, control = how(nperm=999))
+summary(S_ind)
+
+Ca_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$Ca_cat, control = how(nperm=999))
+summary(Ca_ind)
+
+Mg_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$Mg_cat, control = how(nperm=999))
+summary(Mg_ind)
+
+Mn_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$Mn_cat, control = how(nperm=999))
+summary(Mn_ind)
+
+Cu_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$Cu_cat, control = how(nperm=999))
+summary(Cu_ind)
+
+Zn_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$Zn_cat, control = how(nperm=999))
+summary(Zn_ind)
+
+B_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$B_cat, control = how(nperm=999))
+summary(B_ind)
+
+CEC_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$CEC_cat, control = how(nperm=999))
+summary(CEC_ind)
+
+pH_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$pH_cat, control = how(nperm=999))
+summary(pH_ind)
+
+BpH_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$BpH_cat, control = how(nperm=999))
+summary(BpH_ind)
+
+EC_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$EC_cat, control = how(nperm=999))
+summary(EC_ind)
+
+NO3.N_ind <- multipatt(bac_OTUs_tree[-1,],cat_env$NO3.N_cat, control = how(nperm=999))
+summary(NO3.N_ind)
+
+plot_ind <- multipatt(bac_OTUs_tree[-1,],as.factor(cat_env$Plot), control = how(nperm=999))
+summary(plot_ind)
+
+#sort to see what's going on in these plots...
+
+
+sort_b_plot <- bac_tree_env[order(bac_tree_env$Plot),]
+sort_n_plot <- nif_tree_env[order(nif_tree_env$Plot),]
+
+sort_b_plot
+
+##calculating chao per 2020 Balkan et al.
+library(fossil)
+chao1(as.data.frame(bac_OTUs_tree),taxa.row = F)
+#24
+chao1(as.data.frame(nif_OTUs_tree),taxa.row = F)
+#was 10
+#now 13 after trimming to 604 bp and redoing mothur OTU tables
+#7/11: output is 4
+
+#WTF does that even mean???
+estimateR(nif_OTUs_tree,permutations=500)
+specpool(nif_OTUs_tree)
+nspec<-specaccum(nif_OTUs_tree,method="exact",permutations=999)
+bspec<-specaccum(bac_OTUs_tree,method="exact",permutations=999)
+
+dev.off()
+jpeg(filename = "specaccum3.jpg", width=7, height=7, units="in",res = 300)
+#plot(bspec,xlab="Trees",ylab="Species Richness",xlim=c(0,23),ylim=c(0,16),ci.lty=1,ci.col="black")
+plot(nspec, xlab="Trees Sampled",ylab="Species Richness",ci.lty=2,ci.col="black")
+#legend("bottomright", legend = c("16S","nifH"),col=c("black","grey"), lty=c(1,2))
+dev.off()
+
+tree_sp <- matrix(c(19, 23, 16, 15), nrow = 2,
+	              dimnames =
+	       list(c("A. rubra", "A. viridis"),
+		    c("OTU1", "OTU2")))
+btree_sp <- matrix(c(10, 7, 5, 7), nrow = 2,
+	              dimnames =
+	       list(c("A. rubra", "A. viridis"),
+		    c("OTU1", "OTU2")))
+
+library(exact2x2)
+#for fisher exact test, although it's pretty obvious just looking at the counts and we already did a permanova on the whole community composition
+fisher.test(tree_sp, conf.level = 0.95)
+fisher.test(btree_sp, conf.level = 0.95)
+
+#check out the Packfor package for PCNM (but it seems like vegan can do it too)
+
+#correlate richness with env variables?
+
+
+```
+
+```{r raxml_tree}
+
+library(ape)
+library(ggtree)
+
+ngroups <- read.csv("clade_16S_labs4.csv")
+str(ngroups)
+ngroups$Host <- ngroups$Genus
+
+newick <- read.tree(file="RAxML_bipartitions16S_2.newick")
+N16 <- ggtree(newick)
+N16L <- N16 %<+% ngroups + geom_tiplab(align=TRUE, linesize=0.5,aes(color=Host)) +
+  theme(legend.position=c(0.2,0.4)) + 
+  geom_text2(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 50),nudge_x=0.008,size=2) +
+  xlim(0,0.45)
+jpeg(filename="bs_tree_16S_clean.jpg", width=15,height=15, units="in", res=300)
+N16L
+dev.off()
+
+mgroups <- read.csv("clade_labs4.csv")
+str(mgroups)
+mgroups$Host <- mgroups$Source
+
+newick2 <- read.tree(file="RAxML_bipartitionsnifH_2.newick")
+NN <- ggtree(newick2)#+theme_tree2()
+NNL <- NN %<+% mgroups + geom_tiplab(align=TRUE, linesize=0.5,aes(color=Host),offset=0.01) +
+  theme(legend.position=c(0.1,0.5)) + 
+  #geom_point2(aes(subset = as.numeric(sub("/.*", "", label))>50 & !isTip)) +
+  geom_text2(aes(label=label, 
+                 subset = !is.na(as.numeric(label)) & as.numeric(label) > 50), check_overlap = F,nudge_x = 0.001,size=2) +
+  xlim(0,0.165)
+NNL
+
+
+jpeg(filename="bs_tree_nifH_clean.jpg", width=15,height=30, units="in", res=300)
+NNL
+dev.off()
+
+
+newick3 <- read.tree(file="RAxML_bipartitions.1.newick")
+NN <- ggtree(newick3)#+theme_tree2()
+NNL <- NN %<+% mgroups + geom_tiplab(align=TRUE,linesize=0.5,offset=0.01) +scale_color_manual(values=c("#440154ff","#414487ff","#2a788eff","#22a884ff","#7ad151ff","1fa187ff",'#9fda3aff'))+
+  theme(legend.position=c(0.15,0.75)) + 
+  #geom_point2(aes(subset = as.numeric(sub("/.*", "", label))>50 & !isTip)) +
+  geom_text2(aes(label=label, 
+                 subset = !is.na(as.numeric(label)) & as.numeric(label) > 50), check_overlap = F,nudge_x = 0.001,size=2) + 
+  xlim(0,0.165) + geom_tippoint(aes(color=Host),size=2)
+NNL
+
+
+tree <- groupOTU(NN, focus=c("OTU1", "OTU2", "OTU3", "OTU4"))
+
+jpeg(filename="bs_tree_nifH_clean2.jpg", width=15,height=15, units="in", res=300)
+NNL
+dev.off()
+
+show_col(viridis_pal()(6))
+
+#RAxML_bipartitions.1.newick
+#########Ignore stuff below. Tree code is above.###########
+
+raxml_file <- system.file("extdata/RAxML", "RAxML_bipartitions_nifH.TEST", package="ggtree")
+raxml <- read.raxml("C:/Users/emyle/Dropbox/School/Data/Projects/MSH Frankia-Alnus/RAxML_bipartitions_nifH.TEST")
+read.raxml("RAxML_bipartitions.1_nifH.1")
+
+
+bootbac <- ggtree(newick) + geom_text2(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 50),nudge_x=0.01) +
+  geom_label_repel()
+bootbac
+bootbac2 <- bootbac %<+% ngroups + geom_tiplab(align=T,hjust=-0.3,aes(color=Genus)) +theme(legend.position="right",legend.title = element_blank())
+jpeg(filename="bs_tree_16S_nathan.jpg", width=30,height=30, units="in", res=300)
+bootbac2
+dev.off()
+
+
+
+```
+
+
+```{r bar_graph_fig}
+
+bac_freq <- table(bac_tree_env$Richness, bac_tree_env$Species)
+nif_freq <- table(nif_tree_env$Richness, nif_tree_env$Species)
+
+freq <- read.csv("/Users/emyle/Dropbox/School/Data/Projects/MSH Frankia-Alnus/mothur/20191111/freq.csv")
+bfreq <- subset(freq, freq$Gene == "16S")
+nfreq <- subset(freq, freq$Gene == "nif")
+
+b <- ggplot(data=bfreq, aes(x=Strains, y=Frequency, fill=Species)) + geom_bar(stat="identity", position=position_dodge()) +
+  scale_fill_manual(values=c("black","grey")) + 
+  theme_bw() + theme(axis.text=element_text(size=14),axis.title=element_text(size=16)) + 
+  ylab("# of Trees") + xlab("# of Strains") +
+  scale_x_continuous(expand = c(0,0), limits=c(0,4.5)) +
+  scale_y_continuous(expand = c(0,0), limits=c(0,5.5), breaks=c(1:5)) + 
+  theme(strip.background = element_rect(fill="gray85"), strip.text.x = element_text(size = 16,face="bold"))+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position=c(0.85,0.8)) + 
+  theme(legend.title=element_text(size=18, face= "bold"), legend.title.align=0.5, legend.text = element_text(size=16, face="italic")); b
+
+n <- ggplot(data=nfreq, aes(x=Strains, y=Frequency, fill=Species)) + geom_bar(stat="identity", position=position_dodge()) +
+  scale_fill_manual(values=c("black","grey")) + 
+  theme_bw() + theme(axis.text=element_text(size=14),axis.title=element_text(size=16)) + 
+  ylab("# of Trees") + xlab("# of Genotypes") +
+  scale_x_continuous(expand=c(0,0), limits = c(0,3),breaks=c(1,2)) +
+  scale_y_continuous(expand = c(0,0), limits=c(0,11.5),breaks=c(1:11)) +
+  theme(strip.background = element_rect(fill="gray85"), strip.text.x = element_text(size = 16,face="bold"))+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position=c(0.85,0.8)) + 
+  theme(legend.position = c(0.25, 0.8),legend.title=element_text(size=18, face= "bold"), legend.title.align=0.5, legend.text = element_text(size=16, face="italic"))
+n
+
+# scale_x_continuous(expand=c(0,0), limits = c(0,4.5)) +
+
+bb <- b + annotate("text", x = 4.4, y = 5.25, label = "B", size=6)
+na <- n + annotate("text", x = 4.4, y = 11, label = "A", size=6)
+
+grid.arrange(na,bb)
+
+dev.off()
+jpeg(filename = "stacked_bar.jpeg",units="in",width =7, height=7, res=300) #saves graph output
+grid.arrange(na,bb)
+dev.off()
+
+dev.off()
+jpeg(filename = "nif_bar4.jpeg",units="in",width =7, height=7, res=300) #saves graph output
+n
+dev.off()
+
+```
+
+
+```{r heatmap_fig}
+
+#maybe a heatmap will look better
+plot_env <- read.csv("/mothur/plot_env.csv", row.names = 1)
+hmdata <- as.matrix(plot_env[,c(3:12)])
+hmdata
+
+#plain one
+heatmap(hmdata, scale="column")
+
+
+library(RColorBrewer)
+coul = colorRampPalette(brewer.pal(9, "GnBu"))(25)
+greys <- colorRampPalette(brewer.pal(9,"Greys"))(25)
+heatmap(hmdata, Colv = NA, Rowv = NA, scale="column", col = coul)
+heatmap.2(hmdata, Colv = NA, Rowv = NA, scale="column", dendrogram="none", scale="none",col = coul)
+
+dev.off()
+jpeg(filename = "env_heat_map3.jpeg",units="in",width =7, height=7, res=300) #saves graph output
+heatmap(hmdata, Colv = NA, Rowv = NA, scale="column", col = coul)
+dev.off()
+
+```
+
+
+``` {r map_figs} 
+#map to view the sites
+
+gps <- read.csv("gps_plots.csv")
+head(gps)
+
+#for satellite imagery:
+#bullshit API key is required now
+#made an account but had to set up billing
+
+library(ggmap)
+library(ggrepel)
+MSHPP <- c(lon=-122.1719, lat=46.258)
+MSHPP_center <- c(lon=-122.1719, lat=46.257432)
+get_stamenmap(bbox=c(left=-122.183755, bottom=46.248157, right=-122.154928, top=46.266374), zoom=13, maptype = "terrain") %>% ggmap() + geom_point(data=gps,aes(Longitude,Latitude),alpha = 1, fill = "green", pch = 21, size = 3) + labs(x = 'Longitude', y = 'Latitude') + geom_label_repel(data = gps, aes(Longitude, Latitude, label = Plot), fill = "white")
+
+#register_google(key="")
+zoom13 <- get_map(location=MSHPP,zoom=14, maptype="satellite")
+zoom15 <- get_map(location=MSHPP_center,zoom=15, maptype="satellite")
+ggmap(zoom13)
+ggmap(zoom15)
+
+bigmap<-ggmap(zoom13) + geom_point(data=gps,aes(Longitude,Latitude),alpha = 1, fill = "green", pch = 21, size = 3) + labs(x = 'Longitude', y = 'Latitude') + geom_label_repel(data = gps, aes(Longitude, Latitude, label = Plot), fill = "white")
+
+jpeg(filename = "overview_zoom13.jpeg",units="in",width =7, height=7, res=300) #saves graph output
+bigmap
+dev.off()
+
+par(mfrow=c(2,2))
+
+#make separate frames to make panels
+Plot_1 <- c(lon=gps$Longitude[1],lat=gps$Latitude[1])
+Plot_2 <- c(lon=gps$Longitude[2],lat=gps$Latitude[2])
+Plot_3 <- c(lon=gps$Longitude[3],lat=gps$Latitude[3])
+Plot_4 <- c(lon=gps$Longitude[4],lat=gps$Latitude[4])
+Plot_5 <- c(lon=gps$Longitude[5],lat=gps$Latitude[5])
+
+
+
+
+dev.off()
+jpeg(filename = "Plot_1_zoom20.jpeg",units="in",width =7, height=7, res=300) #saves graph output
+plot_1 <- get_map(location=Plot_1,zoom=20,maptype="satellite") %>% ggmap() + geom_point(data=gps,aes(Longitude,Latitude),alpha = 1, fill = "green", pch = 21, size = 3) + geom_label_repel(data = gps, aes(Longitude, Latitude, label = Plot), fill = "white") + theme(axis.title.x=element_blank(),axis.text.x=element_blank(),axis.ticks.x=element_blank(),axis.title.y=element_blank(),axis.text.y=element_blank(),axis.ticks.y=element_blank())
+dev.off()
+
+plot_2 <- get_map(location=Plot_2,zoom=20,maptype="satellite") %>% ggmap() + geom_point(data=gps,aes(Longitude,Latitude),alpha = 1, fill = "green", pch = 21, size = 3) + geom_label_repel(data = gps, aes(Longitude, Latitude, label = Plot), fill = "white")+theme(axis.title.x=element_blank(),axis.text.x=element_blank(),axis.ticks.x=element_blank(),axis.title.y=element_blank(),axis.text.y=element_blank(),axis.ticks.y=element_blank())
+
+plot_3 <- get_map(location=Plot_3,zoom=20,maptype="satellite") %>% ggmap() + geom_point(data=gps,aes(Longitude,Latitude),alpha = 1, fill = "green", pch = 21, size = 3) + geom_label_repel(data = gps, aes(Longitude, Latitude, label = Plot), fill = "white")+theme(axis.title.x=element_blank(),axis.text.x=element_blank(),axis.ticks.x=element_blank(),axis.title.y=element_blank(),axis.text.y=element_blank(),axis.ticks.y=element_blank())
+
+plot_4 <- get_map(location=Plot_4,zoom=20,maptype="satellite") %>% ggmap() + geom_point(data=gps,aes(Longitude,Latitude),alpha = 1, fill = "green", pch = 21, size = 3) + geom_label_repel(data = gps, aes(Longitude, Latitude, label = Plot), fill = "white")+theme(axis.title.x=element_blank(),axis.text.x=element_blank(),axis.ticks.x=element_blank(),axis.title.y=element_blank(),axis.text.y=element_blank(),axis.ticks.y=element_blank())
+
+
+plot_5 <- get_map(location=Plot_5,zoom=20,maptype="satellite") %>% ggmap() + geom_point(data=gps,aes(Longitude,Latitude),alpha = 1, fill = "green", pch = 21, size = 3) + geom_label_repel(data = gps, aes(Longitude, Latitude, label = Plot), fill = "white")+theme(axis.title.x=element_blank(),axis.text.x=element_blank(),axis.ticks.x=element_blank(),axis.title.y=element_blank(),axis.text.y=element_blank(),axis.ticks.y=element_blank())
+
+
+
+dev.new(width=18.2, height=23.7, unit="cm")
+maps <- grid.arrange(plot_1, plot_2, plot_3, plot_4, plot_5, bigmap, ncol=1, nrow=5)
+
+maps #grid.arrange from gridExtra package
+
+
+lay <- rbind(c(6,6,6,6,1),
+             c(6,6,6,6,2),
+             c(6,6,6,6,3),
+             c(6,6,6,6,4),
+             c(6,6,6,6,5))
+
+grob_obj <- c(plot_1, plot_2, plot_3, plot_4, plot_5, bigmap)
+
+dev.off()
+jpeg(filename = "panel_zoom20.jpeg",units="in",width =7, height=7, res=300) #saves graph output
+grid.arrange(grobs=list(plot_1, plot_2, plot_3, plot_4, plot_5, bigmap), layout_matrix=lay)
+dev.off()
+
+
+#original: ggsave(maps, filename = "maps3.png", units="in", width = 7.2, height = 7.8, dpi = 300)
+
+plot_env <- read.csv("/mothur/plot_env.csv")
+
+str(plot_env)
+
+stamen <- get_stamenmap(bbox=c(left=-122.183755, bottom=46.248157, right=-122.164363, top=46.267423), zoom=15, maptype = "toner-lite")
+
+Moisture <- ggmap(stamen,extent="device") + 
+  geom_point(data=plot_env,aes(Longitude,Latitude,color=Moisture, size=Moisture))+
+  scale_color_gradient(low="#000000",high="#bc6cec")+
+  theme(panel.spacing = unit(1, "lines"),legend.position=c(0.15,0.36),
+        legend.text=element_text(size=10), legend.key.height = unit(0.5,"cm"))+
+  geom_label_repel(data = plot_env, aes(Longitude, Latitude, label = Plot), fill = "white", size=4)
+Moisture
+
+NH4.N <- ggmap(stamen,extent = "device") + 
+  geom_point(data=plot_env,aes(Longitude,Latitude,color=NH4.N, size=NH4.N))+
+  scale_color_gradient(low="#000000",high="#4cbfc4")+
+ theme(panel.spacing = unit(1, "lines"),legend.position=c(0.15,0.36),
+        legend.text=element_text(size=10), legend.key.height = unit(0.5,"cm"))+
+  geom_label_repel(data = plot_env, aes(Longitude, Latitude, label = Plot), fill = "white", size=4)
+NH4.N
+
+P <- ggmap(stamen,extent = "device") + 
+  geom_point(data=plot_env,aes(Longitude,Latitude,color=P, size=P))+
+    scale_color_gradient(low="#000000",high="#cf518d")+
+ theme(panel.spacing = unit(1, "lines"),legend.position=c(0.15,0.36),
+        legend.text=element_text(size=10), legend.key.height = unit(0.5,"cm"))+
+  geom_label_repel(data = plot_env, aes(Longitude, Latitude, label = Plot), fill = "white", size=4)
+P
+
+Mg <- ggmap(stamen,extent = "device") + 
+  geom_point(data=plot_env,aes(Longitude,Latitude,color=Mg, size=Mg))+
+    scale_color_gradient(low="#000000",high="#7db442")+
+  theme(panel.spacing = unit(1, "lines"),legend.position=c(0.15,0.36),
+        legend.text=element_text(size=10), legend.key.height = unit(0.5,"cm"))+
+  geom_label_repel(data = plot_env, aes(Longitude, Latitude, label = Plot), fill = "white", size=4)
+Mg
+
+Ca <- ggmap(stamen,extent = "device") + 
+  geom_point(data=plot_env,aes(Longitude,Latitude,color=Ca, size=Ca))+
+    scale_color_gradient(low="#000000",high="#7e88c8")+
+  theme(panel.spacing = unit(1, "lines"),legend.position=c(0.15,0.36),
+        legend.text=element_text(size=10), legend.key.height = unit(0.5,"cm"))+
+  geom_label_repel(data = plot_env, aes(Longitude, Latitude, label = Plot), fill = "white", size=4)
+Ca
+
+S <- ggmap(stamen,extent = "device") + 
+  geom_point(data=plot_env,aes(Longitude,Latitude,color=S, size=S))+
+    scale_color_gradient(low="#000000",high="#cc5d38")+
+  theme(panel.spacing = unit(1, "lines"),legend.position=c(0.15,0.36),
+        legend.text=element_text(size=10), legend.key.height = unit(0.5,"cm"))+
+  geom_label_repel(data = plot_env, aes(Longitude, Latitude, label = Plot), fill = "white", size=4)
+S
+
+Cu <- ggmap(stamen,extent = "device") + 
+  geom_point(data=plot_env,aes(Longitude,Latitude,color=Cu, size=Cu))+
+    scale_color_gradient(low="#000000",high="#caa83c")+
+  theme(panel.spacing = unit(1, "lines"),legend.position=c(0.15,0.36),
+        legend.text=element_text(size=10), legend.key.height = unit(0.5,"cm"))+
+  geom_label_repel(data = plot_env, aes(Longitude, Latitude, label = Plot), fill = "white", size=4)
+Cu
+
+B <- ggmap(stamen,extent = "device") + 
+  geom_point(data=plot_env,aes(Longitude,Latitude,color=B, size=B))+
+    scale_color_gradient(low="#000000",high="#4bb092")+
+ theme(panel.spacing = unit(1, "lines"),legend.position=c(0.15,0.36),
+        legend.text=element_text(size=10), legend.key.height = unit(0.5,"cm"))+
+  geom_label_repel(data = plot_env, aes(Longitude, Latitude, label = Plot), fill = "white", size=4)
+B
+
+CEC <- ggmap(stamen,extent = "device") + 
+  geom_point(data=plot_env,aes(Longitude,Latitude,color=CEC, size=CEC))+
+    scale_color_gradient(low="#000000",high="#79853d")+
+  theme(panel.spacing = unit(1, "lines"),legend.position=c(0.15,0.36),
+        legend.text=element_text(size=10), legend.key.height = unit(0.5,"cm"))+
+  geom_label_repel(data = plot_env, aes(Longitude, Latitude, label = Plot), fill = "white", size=4)
+CEC
+
+EC <- ggmap(stamen,extent = "device") + 
+  geom_point(data=plot_env,aes(Longitude,Latitude,color=EC, size=EC))+
+    scale_color_gradient(low="#000000",high="#e471a8")+
+  theme(panel.spacing = unit(1, "lines"),legend.position=c(0.15,0.36),
+        legend.text=element_text(size=10), legend.key.height = unit(0.5,"cm"))+
+  geom_label_repel(data = plot_env, aes(Longitude, Latitude, label = Plot), fill = "white", size=4)
+EC
+
+library(gridExtra)
+maps <- grid.arrange(Moisture, NH4.N, P, Mg, Ca, S, Cu, B, CEC, EC, ncol=5)
+maps
+
+ggsave(maps, filename = "elt_panel.jpeg", dpi = 300)
+ggsave(maps, filename = "elt_panel.jpeg", units="in", width = 11, height = 8.5,dpi = 300)
+
+
+
+
+
+```
+
