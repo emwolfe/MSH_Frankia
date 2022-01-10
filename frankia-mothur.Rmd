@@ -1544,12 +1544,13 @@ NNL <- NN %<+% mgroups + geom_tiplab(align=TRUE,linesize=0.5,offset=0.01) +scale
   geom_text2(aes(label=label, 
                  subset = !is.na(as.numeric(label)) & as.numeric(label) > 50), check_overlap = F,nudge_x = 0.001,size=2) + 
   xlim(0,0.165) + geom_tippoint(aes(color=Host),size=2)
-NNL
+NNL + geom_hilight(node=15, fill="grey", alpha=.3, extend = 0.175) + geom_hilight(node=31, fill="grey", alpha=.3, extend = 0.175) + geom_hilight(node=62, fill="grey", alpha=.3, extend = 0.175) + geom_hilight(node=91, fill="grey", alpha=.3, extend = 0.175)
+
 
 
 tree <- groupOTU(NN, focus=c("OTU1", "OTU2", "OTU3", "OTU4"))
 
-jpeg(filename="bs_tree_nifH_clean2.jpg", width=15,height=15, units="in", res=300)
+jpeg(filename="bs_tree_nifH_clean3.jpg", width=15,height=15, units="in", res=300)
 NNL
 dev.off()
 
@@ -1675,8 +1676,10 @@ ggmap(zoom15)
 
 bigmap<-ggmap(zoom13) + geom_point(data=gps,aes(Longitude,Latitude),alpha = 1, fill = "green", pch = 21, size = 3) + labs(x = 'Longitude', y = 'Latitude') + geom_label_repel(data = gps, aes(Longitude, Latitude, label = Plot), fill = "white")
 
-jpeg(filename = "overview_zoom13.jpeg",units="in",width =7, height=7, res=300) #saves graph output
-bigmap
+jpeg(filename = "overview_zoom13_2.jpeg",units="in",width =7, height=7, res=300) #saves graph output
+bigmap <-bigmap + annotate("segment",x = -122.18, xend = -122.155, y = 46.255589, yend = 46.255589, col="white") +
+  annotate("segment",x = -122.18, xend = -122.155, y = 46.250721, yend = 46.250721, col="white") + 
+  annotate("segment",x = -122.18, xend = -122.155, y = 46.245853, yend = 46.245853, col="white")
 dev.off()
 
 par(mfrow=c(2,2))
@@ -1692,7 +1695,7 @@ Plot_5 <- c(lon=gps$Longitude[5],lat=gps$Latitude[5])
 
 
 dev.off()
-jpeg(filename = "Plot_1_zoom20.jpeg",units="in",width =7, height=7, res=300) #saves graph output
+jpeg(filename = "Plot_1_zoom20_2.jpeg",units="in",width =7, height=7, res=300) #saves graph output
 plot_1 <- get_map(location=Plot_1,zoom=20,maptype="satellite") %>% ggmap() + geom_point(data=gps,aes(Longitude,Latitude),alpha = 1, fill = "green", pch = 21, size = 3) + geom_label_repel(data = gps, aes(Longitude, Latitude, label = Plot), fill = "white") + theme(axis.title.x=element_blank(),axis.text.x=element_blank(),axis.ticks.x=element_blank(),axis.title.y=element_blank(),axis.text.y=element_blank(),axis.ticks.y=element_blank())
 dev.off()
 
@@ -1708,7 +1711,7 @@ plot_5 <- get_map(location=Plot_5,zoom=20,maptype="satellite") %>% ggmap() + geo
 
 
 dev.new(width=18.2, height=23.7, unit="cm")
-maps <- grid.arrange(plot_1, plot_2, plot_3, plot_4, plot_5, bigmap, ncol=1, nrow=5)
+maps <- grid.arrange(plot_1, plot_2, plot_3, plot_4, plot_5, bigmap, ncol=2, nrow=5)
 
 maps #grid.arrange from gridExtra package
 
@@ -1722,7 +1725,7 @@ lay <- rbind(c(6,6,6,6,1),
 grob_obj <- c(plot_1, plot_2, plot_3, plot_4, plot_5, bigmap)
 
 dev.off()
-jpeg(filename = "panel_zoom20.jpeg",units="in",width =7, height=7, res=300) #saves graph output
+jpeg(filename = "panel_zoom20_2.jpeg",units="in",width =7, height=7, res=300) #saves graph output
 grid.arrange(grobs=list(plot_1, plot_2, plot_3, plot_4, plot_5, bigmap), layout_matrix=lay)
 dev.off()
 
